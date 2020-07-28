@@ -44,8 +44,98 @@ html解析器的主要流程如下图所示
 ![](../image/parseHTML.png)
 
 
+如上图所示，在parse函数中调用parseHTML函数时我们提供了四个钩子函数，start(处理开始标签)、 end(处理结束标签)、chars（处理文本标签）、comment（处理注释），这边我们
+只需要特别关注start，end,chars这三个钩子函数
 
+```
+   parseHTML(template,{
+        start(){}
+        end(){}
+        chars(){}
+        comment()
+   }) 
 
+```
+通过上述的钩子函数，在正则匹配到不同标签位置时调用不同的函数，然后组成ASTElement,下面我们来具体看一下这几个钩子函数，如何形成一个闭环
+
+* 当是开始标签时的钩子函数，会利用参数tag，attrs，unary创建一个ASTElement,并从attrs中取出v-pre,v-for ,v-if, v-once,进行处理，并将对应
+的属性挂载到ASTElement上，将ASTElement push 进stack集合，同时确定当前模板的root级，以及默认当前的父级为element
+
+```
+    let inVPre = false //默认不拥有v-pre指令
+    let currentParent
+    let root
+    let stack
+    export function createASTElement (
+      tag: string,
+      attrs: Array<ASTAttr>,
+      parent: ASTElement | void
+    ): ASTElement {
+      return {
+        type: 1,
+        tag,
+        attrsList: attrs,
+        attrsMap: makeAttrsMap(attrs),
+        rawAttrsMap: {},
+        parent,
+        children: []
+      }
+    }
+
+    参数列表
+    @params tag:标签名
+    @params attrs:标签属性集合
+    @params unary:当前是否单个可闭合标签
+    @params start:正则符合开始的地方
+    @params end:正则符合结束的地方
+    start(tag, attrs, unary, start, end){
+        //创建一个ASTElement
+        let element: ASTElement = createASTElement(tag, attrs, currentParent);
+        //检测当前标签是否有v-pre属性，并想element上添加pre属性，表示当前标签以及子集不需要处理上面的表达式
+        processPre(element)
+        if (element.pre) { 
+            inVPre = true
+        }
+        if (inVPre) {
+            //当前拥有v-pre属性时，也是处理v-pre
+            processRawAttrs(element)//处理pre标签
+        } else if (!element.processed) {//处理标签上的v-for,v-if,v-once属性
+            // structural directives
+            processFor(element)
+            processIf(element)
+            processOnce(element)
+        }
+        if (!root) {//确定根元素
+            root = element
+        }
+        //如果当前不是单个可闭合标签  
+        if (!unary) {
+            currentParent = element
+            stack.push(element)
+        } else {
+            closeElement(element)
+        }
+    }
+
+```
+
+* 当是结束标签时的钩子函数，确定当前标签的直属父级currentParent，将当前标签作为currentParent的children,从stack集合中获取当前结束的是哪个element，默认就是stack的最后一个元素，然后从stack删除这个element，在确定该元素
+父级，既此时stack的最后一个元素，并调用closeElement函数去处理v-if系列（v-else-if 、v-else）指令 、作用域插槽的（v-slot、scope、slot-scope、slot）指令或属性、组件系列（is、inline-template、ref）属性、自定义系列（指令，属性，事件）
+
+```
+    end (tag, start, end) {
+        const element = stack[stack.length - 1]
+        stack.length -= 1
+        currentParent = stack[stack.length - 1]
+        closeElement(element)
+    },
+```
+
+* 当是文本标签时
+
+```
+
+```    
 
 
 
