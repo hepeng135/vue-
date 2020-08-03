@@ -1,4 +1,4 @@
-## vue源码剖析——模板编辑生成渲染函数
+## vue源码剖析——模板编译生成渲染函数
 
 ### 什么是render函数
 我们在编写.vue文件时一般情况下都需要在template中编写html模板，render函数就是将通过将html模板解析转成而成的函数，
@@ -131,12 +131,39 @@ html解析器的主要流程如下图所示
     },
 ```
 
-* 当是文本标签时
-
+* 当是文本标签时的钩子函数,确定当前是纯文本节点还是带有表达式的文本节点，分别对应不用的type,为"2"时代表包含表达式的文本节点,
+为"3"时代表纯文本节点，调用parseText函数用来解析文本节点中的表达式，如```<p>信息{{message}}信息</p>```中的表达式解析如下
 ```
+res:{
+    expression:""信息"+_s(message)+"信息"",
+    tokens:["信息",{@binding: "message"},"信息"],
+}
+
+chars(text: string, start: number, end: number){
+    const children = currentParent.children
+    if (!inVPre && text !== ' ' && (res = parseText(text, delimiters))) {
+         child = {
+             type: 2,
+             expression: res.expression,
+             tokens: res.tokens,
+             text
+         }
+     } else if (text !== ' ' || !children.length || children[children.length - 1].text !== ' ') {
+         child = {
+             type: 3,
+             text
+         }
+     }
+}
 
 ```    
+从上述代码中我们可以看出AST的层级关系，为了维护层级关系我们会维护一个stack（栈），在start函数中我们确定root(根元素)、currentParent(当前父级)，我们以currentParent为当前元素的parent，调用createASTElement函数创建AST（确定了父级）。
+并将当前节点推入stack（栈）中，然后更新currentParent（用作下次使用，默认当前标签存在子集），当end函数触发时，我们推出当前节点el，确定currentParent(当前父级)，并执行currentParent.children.push(el),确定子集。
 
+
+
+回到解析模板的主流程，上面我们知道处理标签的几种钩子函数，那么我们在什么时候去调用呢，同时当我们需要处理很多成对标签时，我们就
+需要重复循环调用上面的几种钩子函数，直到模板为空白时则代表解析完毕，下面我们先看一下如何解析各种字符串触发对应的构造函数。
 
 
 
