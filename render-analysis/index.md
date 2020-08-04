@@ -58,114 +58,240 @@ html解析器的主要流程如下图所示
 ```
 通过上述的钩子函数，在正则匹配到不同标签位置时调用不同的函数，然后组成ASTElement,下面我们来具体看一下这几个钩子函数，如何形成一个闭环
 
-* 当是开始标签时的钩子函数，会利用参数tag，attrs，unary创建一个ASTElement,并从attrs中取出v-pre,v-for ,v-if, v-once,进行处理，并将对应
+* [start钩子函数](./options.start.md)。
+
+    当是开始标签时的钩子函数，会利用参数tag，attrs，unary创建一个ASTElement,并从attrs中取出v-pre,v-for ,v-if, v-once,进行处理，并将对应
 的属性挂载到ASTElement上，将ASTElement push 进stack集合，同时确定当前模板的root级，以及默认当前的父级为element
 
-```
-    let inVPre = false //默认不拥有v-pre指令
-    let currentParent
-    let root
-    let stack
-    export function createASTElement (
-      tag: string,
-      attrs: Array<ASTAttr>,
-      parent: ASTElement | void
-    ): ASTElement {
-      return {
-        type: 1,
-        tag,
-        attrsList: attrs,
-        attrsMap: makeAttrsMap(attrs),
-        rawAttrsMap: {},
-        parent,
-        children: []
-      }
-    }
+    ```
+        let inVPre = false //默认不拥有v-pre指令
+        let currentParent
+        let root
+        let stack
+        export function createASTElement (
+          tag: string,
+          attrs: Array<ASTAttr>,
+          parent: ASTElement | void
+        ): ASTElement {
+          return {
+            type: 1,
+            tag,
+            attrsList: attrs,
+            attrsMap: makeAttrsMap(attrs),
+            rawAttrsMap: {},
+            parent,
+            children: []
+          }
+        }
+    
+        参数列表
+        @params tag:标签名
+        @params attrs:标签属性集合
+        @params unary:当前是否单个可闭合标签
+        @params start:正则符合开始的地方
+        @params end:正则符合结束的地方
+        start(tag, attrs, unary, start, end){
+            //创建一个ASTElement
+            let element: ASTElement = createASTElement(tag, attrs, currentParent);
+            //检测当前标签是否有v-pre属性，并想element上添加pre属性，表示当前标签以及子集不需要处理上面的表达式
+            processPre(element)
+            if (element.pre) { 
+                inVPre = true
+            }
+            if (inVPre) {
+                //当前拥有v-pre属性时，也是处理v-pre
+                processRawAttrs(element)//处理pre标签
+            } else if (!element.processed) {//处理标签上的v-for,v-if,v-once属性
+                // structural directives
+                processFor(element)
+                processIf(element)
+                processOnce(element)
+            }
+            if (!root) {//确定根元素
+                root = element
+            }
+            //如果当前不是单个可闭合标签  
+            if (!unary) {
+                currentParent = element
+                stack.push(element)
+            } else {
+                closeElement(element)
+            }
+        }
+    
+    ```
 
-    参数列表
-    @params tag:标签名
-    @params attrs:标签属性集合
-    @params unary:当前是否单个可闭合标签
-    @params start:正则符合开始的地方
-    @params end:正则符合结束的地方
-    start(tag, attrs, unary, start, end){
-        //创建一个ASTElement
-        let element: ASTElement = createASTElement(tag, attrs, currentParent);
-        //检测当前标签是否有v-pre属性，并想element上添加pre属性，表示当前标签以及子集不需要处理上面的表达式
-        processPre(element)
-        if (element.pre) { 
-            inVPre = true
-        }
-        if (inVPre) {
-            //当前拥有v-pre属性时，也是处理v-pre
-            processRawAttrs(element)//处理pre标签
-        } else if (!element.processed) {//处理标签上的v-for,v-if,v-once属性
-            // structural directives
-            processFor(element)
-            processIf(element)
-            processOnce(element)
-        }
-        if (!root) {//确定根元素
-            root = element
-        }
-        //如果当前不是单个可闭合标签  
-        if (!unary) {
-            currentParent = element
-            stack.push(element)
-        } else {
-            closeElement(element)
-        }
-    }
+* [end钩子函数](./options.end.md)。
 
-```
-
-* 当是结束标签时的钩子函数，确定当前标签的直属父级currentParent，将当前标签作为currentParent的children,从stack集合中获取当前结束的是哪个element，默认就是stack的最后一个元素，然后从stack删除这个element，在确定该元素
+    当是结束标签时的钩子函数，确定当前标签的直属父级currentParent，将当前标签作为currentParent的children,从stack集合中获取当前结束的是哪个element，默认就是stack的最后一个元素，然后从stack删除这个element，在确定该元素
 父级，既此时stack的最后一个元素，并调用closeElement函数去处理v-if系列（v-else-if 、v-else）指令 、作用域插槽的（v-slot、scope、slot-scope、slot）指令或属性、组件系列（is、inline-template、ref）属性、自定义系列（指令，属性，事件）
 
-```
-    end (tag, start, end) {
-        const element = stack[stack.length - 1]
-        stack.length -= 1
-        currentParent = stack[stack.length - 1]
-        closeElement(element)
-    },
-```
+    ```
+        end (tag, start, end) {
+            const element = stack[stack.length - 1]
+            stack.length -= 1
+            currentParent = stack[stack.length - 1]
+            closeElement(element)
+        },
+    ```
 
-* 当是文本标签时的钩子函数,确定当前是纯文本节点还是带有表达式的文本节点，分别对应不用的type,为"2"时代表包含表达式的文本节点,
+* [chars钩子函数](./options.chars.md)。
+    
+    当是文本标签时的钩子函数,确定当前是纯文本节点还是带有表达式的文本节点，分别对应不用的type,为"2"时代表包含表达式的文本节点,
 为"3"时代表纯文本节点，调用parseText函数用来解析文本节点中的表达式，如```<p>信息{{message}}信息</p>```中的表达式解析如下
-```
-res:{
-    expression:""信息"+_s(message)+"信息"",
-    tokens:["信息",{@binding: "message"},"信息"],
-}
-
-chars(text: string, start: number, end: number){
-    const children = currentParent.children
-    if (!inVPre && text !== ' ' && (res = parseText(text, delimiters))) {
-         child = {
-             type: 2,
-             expression: res.expression,
-             tokens: res.tokens,
-             text
+    ```
+    res:{
+        expression:""信息"+_s(message)+"信息"",
+        tokens:["信息",{@binding: "message"},"信息"],
+    }
+    
+    chars(text: string, start: number, end: number){
+        const children = currentParent.children
+        if (!inVPre && text !== ' ' && (res = parseText(text, delimiters))) {
+             child = {
+                 type: 2,
+                 expression: res.expression,
+                 tokens: res.tokens,
+                 text
+             }
+         } else if (text !== ' ' || !children.length || children[children.length - 1].text !== ' ') {
+             child = {
+                 type: 3,
+                 text
+             }
          }
-     } else if (text !== ' ' || !children.length || children[children.length - 1].text !== ' ') {
-         child = {
-             type: 3,
-             text
-         }
-     }
-}
-
-```    
+    }
+    
+    ```    
 从上述代码中我们可以看出AST的层级关系，为了维护层级关系我们会维护一个stack（栈），在start函数中我们确定root(根元素)、currentParent(当前父级)，我们以currentParent为当前元素的parent，调用createASTElement函数创建AST（确定了父级）。
 并将当前节点推入stack（栈）中，然后更新currentParent（用作下次使用，默认当前标签存在子集），当end函数触发时，我们推出当前节点el，确定currentParent(当前父级)，并执行currentParent.children.push(el),确定子集。
 
 
 
-回到解析模板的主流程，上面我们知道处理标签的几种钩子函数，那么我们在什么时候去调用呢，同时当我们需要处理很多成对标签时，我们就
+回到解析模板的主流程，上面我们知道处理标签的几种钩子函数，那么我们在什么时候去调用呢?同时当我们需要处理很多成对标签时，我们就
 需要重复循环调用上面的几种钩子函数，直到模板为空白时则代表解析完毕，下面我们先看一下如何解析各种字符串触发对应的构造函数。
 
+当模板字符串的第一个字符是'<'时，我们进行正则匹配，进行分辨当前是开始标签、结束标签、文本标签、Ie条件注释、Doctype:文档申明
+、注释，这里我们主要介绍开始标签、结束标签、文本标签
 
+* 截取解析开始标签，并触发start钩子函数。
 
+    [parseStartTag](./parseStartTag.md)函数主要通过正则解析出当前开始标签的名称并赋值给match.tagName，以及标签上所有的属性并把每对属性添加进match.attrs
+    数组中，每处理一次就调用advance函数更新一次html和index，最后返回这个match对象（match.tagName:标签名,match.attrs:属性集合
+    ,match.unarySlash ：当前是否是单个可闭合标签）。
+    ```
+    //开始标签开始位置正则，已精简部分
+    const startTagOpen=/^<((?:[a-zA-Z_][\-\.0-9_a-zA-Z]*\:)?[a-zA-Z_][\-\.0-9_a-zA-Z]*)/
+    //标签的结束标志
+    const startTagClose=/^\s*(\/?)>/
+    //标签上的所有属性  
+    const dynamicArgAttribute=/^\s*((?:v-[\w-]+:|@|:|#)\[[^=]+\][^\s"'<>\/=]*)(?:\s*(=)\s*(?:"([^"]*)"+|'([^']*)'+|([^\s"'=<>`]+)))/;
+    const attribute = /^\s*([^\s"'<>\/=]+)(?:\s*(=)\s*(?:"([^"]*)"+|'([^']*)'+|([^\s"'=<>`]+)))?/
+      
+    const startTagMatch = parseStartTag()
+    if (startTagMatch) {
+        handleStartTag(startTagMatch)
+        continue
+    }
+    function parseStartTag () {
+        //通过正则获取当前模板的开始标签
+        const start = html.match(startTagOpen)
+        if (start) {
+          const match = {
+            tagName: start[1],
+            attrs: [],
+            start: index
+          }
+          //更新index，html
+          advance(start[0].length)
+          let end, attr
+           //当前标签是否结束，并且带有属性，获取属性。
+          while (!(end = html.match(startTagClose)) && (attr = html.match(dynamicArgAttribute) || html.match(attribute))) {
+            attr.start = index
+            ///截取获取新的html，去掉正则出来的属性。
+            advance(attr[0].length)
+            attr.end = index
+            match.attrs.push(attr)
+          }
+          if (end) {
+            match.unarySlash = end[1]
+            advance(end[0].length)
+            match.end = index
+            return match
+          }
+        }
+    }
+    ```
+    通过判断的返回的match对象进行判断是否调用[handleStartTag](./handleStartTag.md)函数对匹配出来的属性进行进一步数据整理，将match.attrs
+中每条属性处理成{name,value}的形式，并调用start钩子函数
 
+    ```
+    function handleStartTag (match) {
+        const tagName = match.tagName //获取标签名
+        const unarySlash = match.unarySlash //获取当前标签结束时的标识符，
+        //isUnaryTag 检测当前标签是不是单个、不用成对出现的标签,如input hr br ||  符号转换成Boolean值
+        const unary = isUnaryTag(tagName) || !!unarySlash
+        //获取匹配出标签属性的数量
+        const l = match.attrs.length
+        const attrs = new Array(l)
+        for (let i = 0; i < l; i++) {
+          const args = match.attrs[i]
+          const value = args[3] || args[4] || args[5] || ''
+          attrs[i] = {
+            name: args[1],
+            value: decodeAttr(value, shouldDecodeNewlines)
+          }
+        }
+        //如何当前标签没有闭合标志，则存储到stack数组中，
+        if (!unary) {
+          stack.push({ tag: tagName, lowerCasedTag: tagName.toLowerCase(), attrs: attrs, start: match.start, end: match.end })
+          lastTag = tagName
+        }
+        options.start(tagName, attrs, unary, match.start, match.end)
+      }
+    
+    ```
+  
+* 截取解析结束标签，调用end钩子函数
+    
+    结束标签处理相对开始标签就容易很多，我们不需要在抽取标签的属性信息，[parseEndTag](./parseEndTag.md)函数主要从我们维护的栈（stack）
+    中取出对应的开始标签，并调用对应的end钩子函数
+    
+    ```
+    const endTag=/^<\/((?:[a-zA-Z_][\-\.0-9_a-zA-Z]*\:)?[a-zA-Z_][\-\.0-9_a-zA-Z]*)/
+    const endTagMatch = html.match(endTag)
+    if (endTagMatch) {
+        const curIndex = index
+        advance(endTagMatch[0].length)
+        parseEndTag(endTagMatch[1], curIndex, index)
+        continue
+    }
+    ```
+* 截取解析文本标签，调用chars钩子函数
 
+    ```
+    let text, rest, next
+    if (textEnd >= 0) {
+        rest = html.slice(textEnd)
+        console.log(rest)
+        while (
+            !endTag.test(rest) && //不是结束标签
+            !startTagOpen.test(rest) && //不是开始标签
+            !comment.test(rest) &&  //不是注释
+            !conditionalComment.test(rest)//不是Ie判断
+        ) {
+            //带有<符号的纯文本
+            //while循环查找<，然后更新rest和textEnd
+            next = rest.indexOf('<', 1)
+            if (next < 0) break
+            textEnd += next
+            rest = html.slice(textEnd)
+        }
+        text = html.substring(0, textEnd) //获取所有的纯文本
+    }
+    //处理当前的文本标签或者空白标签
+    if (options.chars && text) {
+        options.chars(text, index - text.length, index)
+    }
+    ``` 
+    
