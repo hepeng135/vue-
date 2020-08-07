@@ -223,7 +223,8 @@ html解析器的主要流程如下图所示
     }
     ```
     通过判断的返回的match对象进行判断是否调用[handleStartTag](./handleStartTag.md)函数对匹配出来的属性进行进一步数据整理，将match.attrs
-中每条属性处理成{name,value}的形式，并调用start钩子函数
+中每条属性处理成{name,value}的形式，并调用start钩子函数。
+    其实这中间我们需要考虑 hr、input等 这种可单个标签出现的处理和p标签中不能出现块元素的问题，我贴的代码中并没有表现出来）
 
     ```
     function handleStartTag (match) {
@@ -255,7 +256,7 @@ html解析器的主要流程如下图所示
 * 截取解析结束标签，调用end钩子函数
     
     结束标签处理相对开始标签就容易很多，我们不需要在抽取标签的属性信息，[parseEndTag](./parseEndTag.md)函数主要从我们维护的栈（stack）
-    中取出对应的开始标签，并调用对应的end钩子函数
+    中取出对应的开始标签，并调用对应的end钩子函数。
     
     ```
     const endTag=/^<\/((?:[a-zA-Z_][\-\.0-9_a-zA-Z]*\:)?[a-zA-Z_][\-\.0-9_a-zA-Z]*)/
@@ -267,13 +268,16 @@ html解析器的主要流程如下图所示
         continue
     }
     ```
-* 截取解析文本标签，调用chars钩子函数
+* 截取解析文本节点。
+    因为标签都是 < 开头，对应不是以 < 开头的模板，则到 < 位置前的字符就为纯文本标签，
+    但是我们需要考虑假如当前这段字符中就存在 < ,那么我们就需要截取 < 后的所有字符，进行判断，看是否纯文本，并更新textEnd和rest
+    直到不满足条件位置，这个时候我们就拿到了标签和标签之前的是文本节点。
 
     ```
     let text, rest, next
     if (textEnd >= 0) {
         rest = html.slice(textEnd)
-        console.log(rest)
+        
         while (
             !endTag.test(rest) && //不是结束标签
             !startTagOpen.test(rest) && //不是开始标签
@@ -294,4 +298,300 @@ html解析器的主要流程如下图所示
         options.chars(text, index - text.length, index)
     }
     ``` 
+  
+* 其他情况处理
+
+    对应模板中出现的script、style、textarea标签中的所有字符我们都当文本节点去处理。
+    ```
+    while（html）{
+         //isPlainTextElement判断是否有上个标签(既开始标签)，或者是不是 'script,style,textarea
+        if (!lastTag || !isPlainTextElement(lastTag)) {
+            //匹配注释，然后处理注释
+            //匹配Ie条件注释验证，然后进行处理
+            //匹配 Doctype:文档申明，然后进行处理
+            //匹配结束标签,然后进行处理
+            //匹配到开始标签,然后进行处理
+            //匹配文本标签，然后进行处理
+        }else{
+            let endTagLength = 0
+            const stackedTag = lastTag.toLowerCase()
+            const reStackedTag = reCache[stackedTag] || (reCache[stackedTag] = new RegExp('([\\s\\S]*?)(</' + stackedTag + '[^>]*>)', 'i'))
+            
+            //reStackedTag : /([\s\S]*?)(<\/style|script|textarea[^>]*>)/i
+            
+            const rest = html.replace(reStackedTag, function (all, text, endTag) {
+                //all:当前匹配度的全部内容  ，text当前第一个表达式中值：style中的内容  endTag:第二个表达式中的内容 </style>
+                endTagLength = endTag.length  //结束标签的内容
+                
+                if (!isPlainTextElement(stackedTag) && stackedTag !== 'noscript') {
+                    text = text
+                        .replace(/<!\--([\s\S]*?)-->/g, '$1') 
+                        .replace(/<!\[CDATA\[([\s\S]*?)]]>/g, '$1')
+                }
+                if (shouldIgnoreFirstNewline(stackedTag, text)) {
+                    text = text.slice(1)
+                }
+                if (options.chars) {
+                    options.chars(text)
+                }
+                return ''
+            }) 
+        }
+  
+     }   
+    ```
     
+    
+综上所述，在解析一段模板便签时，通过while(html)循环进行html模板处理，每匹配到对应的项就调用对应钩子函数进行处理，并且更新html模板
+去掉已经处理的部分，并跳出此次循环，进行到下一段的处理中，直到当前html为空时，这样我们就创建出呢ASTElement
+    
+
+### 优化器
+
+优化器顾名思义就是优化上面生生成的ASTElement，具体作用：给ASTElement中的各个节点打上 static （是否静态标签）、staticRoot（是否静态父级），如下
+
+1.  在ASTElement上找出静态节点并给静态标签打上标记，static：true
+2.  在ASTElement中找到静态节点的根元素并打上标记。staticRoot:true
+
+这样做有以下好处：
+
+1.  每次重新渲染时，不用为静态节点重新创建节点
+2.  在虚拟DOM中打补丁的过程中可以直接跳过
+   
+优化器的主函数，调用markStatic为所有元素打上静态标记，然后在调用markStaticRoots为所有元素打上静态根节点标记
+```
+function optimize (root: ?ASTElement, options: CompilerOptions) {
+    if (!root) return
+    //options.staticKeys:"staticClass,staticStyle"
+    isStaticKey = genStaticKeysCached(options.staticKeys || '')
+    //isPlatformReservedTag：当前元素是否html元素或svg
+    isPlatformReservedTag = options.isReservedTag || no
+    
+    //标记所有 el.static：true  or false   静态节点，非静态节点
+    markStatic(root)
+    
+    //标签所有的静态根节点
+    markStaticRoots(root, false)
+}
+```
+markStatic：为所有元素打上静态标记的函数主要内容,递归检测(isStatic)所有的标签，当子集是非静态时，父级绝对为非静态
+```
+function markStatic (node: ASTNode) {
+  //isStatic 判断当前是否静态标签
+  node.static = isStatic(node)
+  if (node.type === 1) {
+    //isPlatformReservedTag函数，确定是否html标签，当不是web平台标签时，就表示是自定义标签既自定义指令
+    //当前标签是自定义组件且不是slot  且没有inline-template属性
+    if (
+      !isPlatformReservedTag(node.tag) &&
+      node.tag !== 'slot' &&
+      node.attrsMap['inline-template'] == null
+    ) {
+      return
+    }
+    for (let i = 0, l = node.children.length; i < l; i++) {
+      const child = node.children[i]
+      markStatic(child)
+      if (!child.static) {
+        node.static = false
+      }
+    }
+    if (node.ifConditions) {
+      for (let i = 1, l = node.ifConditions.length; i < l; i++) {
+        const block = node.ifConditions[i].block
+        markStatic(block)
+        if (!block.static) {
+          node.static = false
+        }
+      }
+    }
+  }
+}
+```
+markStaticRoots：为所有的静态根组件打上静态标记（staticRoot）, 有一种特殊情况需要处理，如父节点为静态节点，子节点只有一个且
+为纯文本节点时，我们不做静态标记，没有收益。
+```
+function markStaticRoots (node: ASTNode, isInFor: boolean) {
+    if (node.type === 1) {
+        //当前是静态标签或者拥有v-once指令，
+        if (node.static || node.once) {
+            node.staticInFor = isInFor //当前是否拥有v-for
+        }
+        //当静态节点下只有一个子节点且为文本节点时，我们不标记,因为没有收益
+        if (node.static && node.children.length && !(
+            node.children.length === 1 &&
+            node.children[0].type === 3
+        )) {
+            node.staticRoot = true
+            return
+        } else {
+            node.staticRoot = false
+        }
+        if (node.children) {
+            for (let i = 0, l = node.children.length; i < l; i++) {
+                markStaticRoots(node.children[i], isInFor || !!node.for)
+            }
+        }
+        if (node.ifConditions) {
+            for (let i = 1, l = node.ifConditions.length; i < l; i++) {
+                markStaticRoots(node.ifConditions[i].block, isInFor)
+            }
+        }
+    }
+}
+
+``` 
+### 生成器
+
+将ASTElement生成一个函数，改函数用于创建vnode，通过生成器将ASTElement用字符串连接起来，然后利用new Function 创建出
+渲染函数render
+
+我们现在先综合起来进行看 
+
+```
+ //模板
+<p class="demo" :class={"box":true}>{{mess}}</p>
+
+//得到ASTElement
+{
+    type:1,
+    tag:'p',
+    attrsList:[],
+    attrsMap:[class: "demo", :class: "{"box":true}"],
+    staticClass: ""demo"",
+    classBinding:"{"box":true}",
+    static: false,
+    staticRoot: false,
+    plain: false
+    children:[
+        {
+            type:'2',
+            expression: "_s(mess)",
+            tokens:[{@binding: "mess"}],
+            text: "{{mess}}",
+            static:false
+        }
+    ]
+}
+
+//生成字符串
+ "with(this){return _c('p',{staticClass:"demo",class:{'box':true}},[_v(_s(mess))])"  
+```
+如上所示，当将上述字符串放入new Function 生成个函数时，this应该为当前组件的实例，根据with特性可以很容易得到 ，
+_c应该为createElement函数，_v和_s也应该改实例原型上的方法，用于创建vnode，mess为data里面提供的数据，因为vue将所有data
+里面提供的数据都代理到当前实例上作为属性，所有可以直接访问。
+
+链接的方式就是 标签名 + {data（标签属性）}+[children]
+
+
+* 元素节点
+
+    先对元素节点上的一些特殊属性进行分类处理，然后处理节点上的其他属性，当如果该节点有子集的话则开始处理子集。
+    
+    ```
+        genElement (el: ASTElement, state: CodegenState): string {
+            if (el.parent) { //el的父级，当el.parent拥有v-pre时  默认el.parent下面所有的子集都自动获得
+                el.pre = el.pre || el.parent.pre  //当前el  或者el.parent是否拥有v-pre指令
+            }
+            if (el.staticRoot && !el.staticProcessed) { //处理纯静态节点
+                return genStatic(el, state)
+            } else if (el.once && !el.onceProcessed) { //处理v-once
+                return genOnce(el, state)
+            } else if (el.for && !el.forProcessed) { //处理v-for
+                return genFor(el, state)
+            } else if (el.if && !el.ifProcessed) {//处理v-if
+                return genIf(el, state)
+            } else if (el.tag === 'template' && !el.slotTarget && !state.pre) {//处理template
+                return genChildren(el, state) || 'void 0'
+            } else if (el.tag === 'slot') { //处理slot
+                return genSlot(el, state)
+            } else {
+                let code
+                if (el.component) {//处理 :is 绑定属性
+                    code = genComponent(el.component, el, state)
+                } else {//元素节点
+                    let data
+                    if (!el.plain || (el.pre && state.maybeComponent(el))) {
+                        //处理元素上的属性
+                        data = genData(el, state)
+                    }
+                    //如果有子集话。
+                    const children = el.inlineTemplate ? null : genChildren(el, state, true)
+                    code = `_c('${el.tag}'${
+                        data ? `,${data}` : '' // data
+                    }${
+                        children ? `,${children}` : '' // children
+                    })`
+                }
+                // module transforms
+                for (let i = 0; i < state.transforms.length; i++) {
+                    code = state.transforms[i](el, code)
+                }
+                return code
+            }
+        }
+
+  
+    ```
+    genData处理节点上的属性，生成对应的data.
+    
+    ```
+    export function genData (el: ASTElement, state: CodegenState): string {
+    let data = '{' 
+            //处理自定义指令
+            const dirs = genDirectives(el, state)
+            if (dirs) data += dirs + ','
+        
+            // key  处理key  'key:el.key'
+            if (el.key) data += `key:${el.key},`
+            
+            // ref  处理ref
+            if (el.ref) data += `ref:${el.ref},`
+        
+            if (el.refInFor) {
+                data += `refInFor:true,`
+            }
+            //code....
+    }
+    ```
+    生成children，在生成children中我们在调用genElement，其实也是一个循环递归的过程。
+    
+    ```
+    export function genChildren (
+      el: ASTElement,
+      state: CodegenState,
+      checkSkip?: boolean,
+      altGenElement?: Function,
+      altGenNode?: Function
+    ): string | void {
+        
+        //code...
+        const gen = altGenNode || genNode
+        return `[${children.map(c => gen(c, state)).join(',')}]${
+            normalizationType ? `,${normalizationType}` : ''
+        }`
+  
+    }
+    function genNode (node: ASTNode, state: CodegenState): string {
+        if (node.type === 1) {
+            return genElement(node, state)
+        } else if (node.type === 3 && node.isComment) {
+            return genComment(node)
+        } else {
+            return genText(node)
+        }
+    }
+  
+    ```
+  
+
+
+* 文本节点
+    ```
+    function genText (text: ASTText | ASTExpression): string {
+      return `_v(${text.type === 2
+        ? text.expression // no need for () because already wrapped in _s()
+        : transformSpecialNewlines(JSON.stringify(text.text))
+      })`
+    }
+    ```
