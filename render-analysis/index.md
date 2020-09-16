@@ -489,47 +489,47 @@ _c应该为createElement函数，_v和_s也应该改实例原型上的方法，�
     先对元素节点上的一些特殊属性进行分类处理，然后处理节点上的其他属性，当如果该节点有子集的话则开始处理子集。
     
     ```
-        genElement (el: ASTElement, state: CodegenState): string {
-            if (el.parent) { //el的父级，当el.parent拥有v-pre时  默认el.parent下面所有的子集都自动获得
-                el.pre = el.pre || el.parent.pre  //当前el  或者el.parent是否拥有v-pre指令
-            }
-            if (el.staticRoot && !el.staticProcessed) { //处理纯静态节点
-                return genStatic(el, state)
-            } else if (el.once && !el.onceProcessed) { //处理v-once
-                return genOnce(el, state)
-            } else if (el.for && !el.forProcessed) { //处理v-for
-                return genFor(el, state)
-            } else if (el.if && !el.ifProcessed) {//处理v-if
-                return genIf(el, state)
-            } else if (el.tag === 'template' && !el.slotTarget && !state.pre) {//处理template
-                return genChildren(el, state) || 'void 0'
-            } else if (el.tag === 'slot') { //处理slot
-                return genSlot(el, state)
-            } else {
-                let code
-                if (el.component) {//处理 :is 绑定属性
-                    code = genComponent(el.component, el, state)
-                } else {//元素节点
-                    let data
-                    if (!el.plain || (el.pre && state.maybeComponent(el))) {
-                        //处理元素上的属性
-                        data = genData(el, state)
-                    }
-                    //如果有子集话。
-                    const children = el.inlineTemplate ? null : genChildren(el, state, true)
-                    code = `_c('${el.tag}'${
-                        data ? `,${data}` : '' // data
-                    }${
-                        children ? `,${children}` : '' // children
-                    })`
-                }
-                // module transforms
-                for (let i = 0; i < state.transforms.length; i++) {
-                    code = state.transforms[i](el, code)
-                }
-                return code
-            }
+    function genElement (el: ASTElement, state: CodegenState): string {
+        if (el.parent) { //el的父级，当el.parent拥有v-pre时  默认el.parent下面所有的子集都自动获得
+            el.pre = el.pre || el.parent.pre  //当前el  或者el.parent是否拥有v-pre指令
         }
+        if (el.staticRoot && !el.staticProcessed) { //处理纯静态节点
+            return genStatic(el, state)
+        } else if (el.once && !el.onceProcessed) { //处理v-once
+            return genOnce(el, state)
+        } else if (el.for && !el.forProcessed) { //处理v-for
+            return genFor(el, state)
+        } else if (el.if && !el.ifProcessed) {//处理v-if
+            return genIf(el, state)
+        } else if (el.tag === 'template' && !el.slotTarget && !state.pre) {//处理template
+            return genChildren(el, state) || 'void 0'
+        } else if (el.tag === 'slot') { //处理slot
+            return genSlot(el, state)
+        } else {
+            let code
+            if (el.component) {//处理 :is 绑定属性
+                code = genComponent(el.component, el, state)
+            } else {//元素节点
+                let data
+                if (!el.plain || (el.pre && state.maybeComponent(el))) {
+                    //处理元素上的属性
+                    data = genData(el, state)
+                }
+                //如果有子集话。
+                const children = el.inlineTemplate ? null : genChildren(el, state, true)
+                code = `_c('${el.tag}'${
+                    data ? `,${data}` : '' // data
+                }${
+                    children ? `,${children}` : '' // children
+                })`
+            }
+            // module transforms
+            for (let i = 0; i < state.transforms.length; i++) {
+                code = state.transforms[i](el, code)
+            }
+            return code
+        }
+    }
 
   
     ```
