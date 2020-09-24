@@ -87,7 +87,7 @@ class Dep {
 class Watcher{
     constructor(vm,expOrFn,cb){
         this.vm=vm;
-        this.getter=Object.prototype.toString.call(expOrFn)==='Function' ? expOrFn : parsePath(expOrFn);
+        this.getter=expOrFn
 
         this.cb=cb;
 
@@ -227,15 +227,15 @@ class Observer{
 }
 function defineReactive(obj,key,val){
     let dep=new Dep();
-    let childDep=observe(val);
+    let childOb=observe(val);
     Object.defineProperty(obj,key,{
         enumerable:true,
         configurable:true,
         value:{
             get:function(){
                 dep.depend();
-                if(childDep){
-                    childDep.dep.depend();
+                if(childOb){
+                    childOb.dep.depend();
                 }
                 return val
             },
@@ -250,7 +250,7 @@ function defineReactive(obj,key,val){
 }
 ```
 上述代码，我们增加了一个observe函数，用来检测当前value是否拥有__ob__属性，没有的话就调用Observer进行实例化并添加__ob__属性，我们在Observer中构造函数
-中添加__ob__属性指向当前这个实例，从而可以访问到对应的dep，当访问数据 {list:[1,2,3,4]}时，我们属性访问list这个属性key，触发对应的getter，我们通过childDep可以访问
+中添加__ob__属性指向当前这个实例，从而可以访问到对应的dep，当访问数据 {list:[1,2,3,4]}时，我们属性访问list这个属性key，触发对应的getter，我们通过childOb可以访问
 到这个数组value对应的dep，进而进行依赖收集。
 
 同时上述代码也增加了给目标数组添加拦截，因为我们不能污染全局的数组方法，我们对需要添加拦截的数组进行添加arrMethods方法,挂载再__proto__上。
@@ -262,15 +262,15 @@ list[0][name]='hepeng1',上述代码中，我们并没有对应这种进去进�
 ```
 function defineProperty(obj,key,val){
     let dep=new Dep();
-    let childDep=observe(val);
+    let childOb=observe(val);
     Object.defineProperty(obj,key,{
         enumerable:true,
         configurable:true,
         value:{
             get:function(){
                 dep.depend();
-                if(childDep){
-                    childDep.dep.depend();
+                if(childOb){
+                    childOb.dep.depend();
                     if(Array.isArray(val)){
                         dependArray(val)
                     }
@@ -291,28 +291,10 @@ function dependArray(val){
 }
 ```
 上述代码解决了数组中是Object类型数据时无法收集依赖的问题，我们新建一个dependArray函数，通过循环访问每一项属性__ob__，然后调用depend()进行收集依赖
-，如果这一项数数组，将递归调用dependArray。同时该函数的第一次调用将放再getter中，如果当前属性对应的value是引用类型并且有childDep时并且是数组时则调用
+，如果这一项数数组，将递归调用dependArray。同时该函数的第一次调用将放再getter中，如果当前属性对应的value是引用类型并且有childOb时并且是数组时则调用
 dependArray。
 
-现在我们可以通过list.splice(0,0,1)去操作数组，从而调用依赖函数进行视图UI更新，但是假如我们添加的是引用类型数据怎么办，再次修改这个引用类型中的值，依赖
-并没有执行，因为这个新添加的数据并没有进行数据变化侦测。数组存在这种情况，object数据也存在这种情况 
-
-```
-eg:如下所示，上述代码在对数组或者对象进行添加或者修改，新值将不会进行数据变化侦测，
- data(){
-    return {
-        list:[1,2,3,4],
-        name:'hepeng'
-    }
-}
-this.list.push({name:'he',age:'22'})
-this.name={name:'he',uid:'111'}
-
-```
-
-
-
-上述所有的代码中，已经对数据进行了收集，那么我们怎么进行触发呢，当value为object类型时，我们设置新值的时候直接在setter里面去触发，当value为数组时
+上述所有的代码中，已经对数组类型的数据进行了依赖收集，那么我们怎么进行触发呢，当value为object类型时，我们设置新值的时候直接在setter里面去触发，当value为数组时
 我们需要在拦截的方法中进行触发 ，代码如下
 ```
 const arrayProto=Array.prototype;
@@ -332,6 +314,66 @@ let arrMethods=Object.create(arrayProto);
 
 ```
 
+现在我们可以通过list.splice(0,0,1)去操作数组，从而调用依赖函数进行视图UI更新，但是假如我们添加的是引用类型数据怎么办，再次修改这个引用类型中的值，依赖
+并没有执行，因为这个新添加的数据并没有进行数据变化侦测。数组存在这种情况，object数据也存在这种情况 
+
+```
+eg:如下所示，上述代码在对数组或者对象进行添加或者修改，新值将不会进行数据变化侦测，
+ data(){
+    return {
+        list:[1,2,3,4],
+        name:'hepeng'
+    }
+}
+this.list.push({name:'he',age:'22'})
+this.name={name:'he',uid:'111'}
+
+```
+解决上述问题，我们需要在数据进行赋值时，将新数据进行observe，确保也是响应式，我们只需要在setter和数组拦截的方法中去调用observe就好
+
+```
+//对于Object
+function defineReactive(obj,key,val){
+    //code...
+    set:function(newVal){
+        //code..、
+        //新添加的
+        childOb=observe(newVal);
+        return newVal
+    }
+    
+}
+//对于数组
+let arrayProto=Array.prototype;
+let arrMethods=Object.create(arrayProto);
+['pop','push','shift','unshift','sort','reverse','splice'].forEach(function(methodName){
+    let original=arrayProto[methodName];
+    Object.defineProerty(arrMethods,methodName,{
+        enumerable:true,
+        configurable:true,
+        value:function(...args){
+            let result=original.apply(this,args)
+            let ob=this.__ob__;
+            let inserted;
+            switch(methodName){
+                case push:
+                case unshift:
+                    inserted=args;
+                    break
+                case splice:
+                    inserted=args.length>=3 ? args.slice(2) : ''
+                    break
+            }
+            inserted && ob.observeArray(inserted);
+            ob.dep.notify();  
+            return result
+        }
+    })   
+})
+
+
+```
+
 通过上述的总结，我们将得到下面的代码
 
 ```
@@ -342,8 +384,20 @@ let arrMethods=Object.create(arrayProto);
     Object.defineProperty(arrMethods,methodName,{
         enumrable:true,
         configurable:true,
-        value:function(...arg){
-            
+        value:function(...args){
+            let result=original.apply(this,args);
+            let ob=this.__ob__;
+            let inserted;
+            switch(methodName){
+                case 'push':
+                case 'unshift':
+                    inserted=args;
+                case 'splice' :
+                    inserted=args.slice(2);
+            }
+            inserted && ob.observeArray(inserted);
+            ob.dep.notify();
+            return result
         }
     })
 })
@@ -361,18 +415,24 @@ function observe(value){
 }
 function defineReactive(obj,key,val){
     let dep=new Dep();
-    let childDep=observe(val);
+    let childOb=observe(val);
 
     Object.defineProperty(obj,key,{
         get:function(){
             dep.depend();
-            if(childDep){
-                childDep.dep.depend();
+            if(childOb){
+                childOb.dep.depend();
                 if(Array.isArray(val)){
                     dependArray(val);
                 }
             }
             retturn val
+        },
+        set:function(newVal){
+            if(newVal===val) return
+            val=newVal; 
+            childOb=observe(newVal);
+            dep.notify();    
         }
     })  
 }
@@ -387,6 +447,7 @@ class Observer{
         });
 
         if(Array.isArray(val)){
+            val.__proto__=arrMethods;
             this.observerArray(val)
         }else{
             this.walk(val)
@@ -414,6 +475,7 @@ function dependArray(val){
         }
     }
 }
+Dep.target=null
 class Dep{
     constructor(){
         this.subs=[];
@@ -430,9 +492,19 @@ class Dep{
         }
     }
 }
-
 class Watcher{
-    
+    constructor(expOrFn,cb,options){
+        this.getter=expOrFn;
+        this.cb=cb;
+    }
+    get(){
+        Dep.target=this;
+        this.gette();
+        Dep.target=null
+    }
+    update(){
+        //更新操作
+    }
 }
 ```
 
