@@ -227,7 +227,7 @@ class Observer{
 }
 function defineReactive(obj,key,val){
     let dep=new Dep();
-    let childOb=observe(val);
+    let childOb=observe(val);//获取对应数组的dep
     Object.defineProperty(obj,key,{
         enumerable:true,
         configurable:true,
@@ -257,7 +257,7 @@ function defineReactive(obj,key,val){
 
 当数组里面的值都是主数据类型(Number,Boolean,String等)时，我们进行修改只能用splice方法进行（其他操作用上面对应的7种方法），这样才能触发依赖，不能直接
 arr[index]=xx 这样进行修改，如果数组里面对象时，这个时候我们需要对对象中某个值进行修改要怎么办了，直接访问修改即可，eg：list:[{name:'hepeng'}] 访问：
-list[0][name]='hepeng1',上述代码中，我们并没有对应这种进去进行收集依赖，下面代码将解决这个问题，我们只需要在get中添加代码即可
+list[0][name]='hepeng1',上述代码中，我们并没有对这种情况进行收集依赖，下面代码将解决这个问题，我们只需要在get中添加代码即可
 
 ```
 function defineProperty(obj,key,val){
@@ -406,7 +406,7 @@ let arrMethods=Object.create(arrayProto);
 function observe(value){
     if(typeof value !=='object') return;
     let ob;
-    if(value.hasOwnProperty('__ob__') && value.__ob__.instanceOf Observer){
+    if(value.hasOwnProperty('__ob__') && value.__ob__ instanceOf Observer){
         ob=value.ob
     }else{
         ob=new Observer(value)
