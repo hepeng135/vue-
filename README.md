@@ -10,4 +10,4 @@
 #### [Vue源码解析之Patch](./vue-patch/index.md)
 
 #### Vue的实例方法
-* [$set、$delete方法详解](./vuePrototype.$set、$delete.md)
+* [$set、$delete方法详解](./VuePrototype/$set、$delete.md)
