@@ -11,3 +11,4 @@
 
 #### Vue的实例方法
 * [$set、$delete方法详解](./VuePrototype/$set、$delete.md)
+* [watch与computed的不同](./VuePrototype/methods、watch、computed的不同.md)
