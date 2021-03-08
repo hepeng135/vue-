@@ -12,3 +12,9 @@
 #### Vue的实例方法
 * [$set、$delete方法详解](./VuePrototype/$set、$delete.md)
 * [watch与computed的不同](./VuePrototype/methods、watch、computed的不同.md)
+
+# Vue核心插件源码解析
+
+#### [VueRouter源码解析](./VueRoute/index.md)
+
+#### [Vuex源码解析](./vuex/index.md)
