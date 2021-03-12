@@ -14,4 +14,64 @@ server.js 和 webpack.config.js文件，在server文件我们会启动一个node
 ## 源码解析
 
 #### 从入口开始
+```
+import { Store, install } from './store'
+import { mapState, mapMutations, mapGetters, mapActions, createNamespacedHelpers } from './helpers'
+import createLogger from './plugins/logger'
 
+export default {
+    Store,
+    install,
+    version: '__VERSION__',
+    mapState,
+    mapMutations,
+    mapGetters,
+    mapActions,
+    createNamespacedHelpers,
+    createLogger
+}
+
+export {
+    Store,
+    install,
+    mapState,
+    mapMutations,
+    mapGetters,
+    mapActions,
+    createNamespacedHelpers,
+    createLogger
+}
+
+```
+如上述代码所示，在入口我们先导入主要Store，install，然后就是一些辅助方法，然后在将其用两种方法导出。下面我们先主要
+分析一下Store和install
+
+#### 安装Store插件的Install
+在Vue安装插件需要调用Vue.use(plugin)来安装对应插件，在Vue中use的实现其实就是调用当前插件身上的install方法进行安装，
+但是在Store对象上并没有install方法，那是怎么实现的，在store.js文件中我们需要注意如下代码。
+```
+//store.js文件中的部分代码
+import applyMixin from './mixin'
+export class Store {
+    constructor (options = {}) {
+    
+        if (!Vue && typeof window !== 'undefined' && window.Vue) {
+            install(window.Vue)
+        }
+        //code. ...
+    }
+}
+export function install (_Vue) {
+  if (Vue && _Vue === Vue) {
+    if (__DEV__) {
+      console.error(
+        '[vuex] already installed. Vue.use(Vuex) should be called only once.'
+      )
+    }
+    return
+  }
+  Vue = _Vue
+  // applyMixin 在2.0版本中：每个组件混入beforeCreate构造函数，在每个组件实例上挂载$store属性，使得在每个组件实例中我们都能访问$store  既this.$store
+  applyMixin(Vue)
+}
+```
