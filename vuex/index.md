@@ -191,7 +191,7 @@ this._mutations = Object.create(null)
 this._wrappedGetters = Object.create(null)
 //处理Store中的模块
 this._modules = new ModuleCollection(options)
-//存放当前命名空间模块 eg: {a:module,b:module,''a/c':module}
+//存放当前命名空间模块 eg: {a:module,b:module,''a/c':module}  这个时候模板a,b,a/c的namespaced都是true
 this._modulesNamespaceMap = Object.create(null)
 //存放所有通过API subscribe 添加的订阅store的mutation。
 this._subscribers = []
@@ -201,8 +201,9 @@ this._watcherVM = new Vue()
 在属性初始化中，我们先中点介绍this._modules，他通过创建ModuleCollection类的实例进行初始化，传入的options和创建Store类的实例options
 一样，接下来我们看看这个ModuleCollection类。
 
+##### ModuleCollection类详解
 ```
-export default class modeModuleCollection {
+export default class ModuleCollection {
     constructor(rawRootModule){
         this.register([], rawRootModule, false)
     }
@@ -269,6 +270,7 @@ if (rawModule.modules) {
 
 综上所属在register方法函数中，我们主要是将传进来的module模块进行实例化，然后根据其子父级的关系创建一个链式结构，并赋值到this.root上，下面
 我们看看在register函数中调用的Module类的具体代码
+##### Module类的详情
 ```
 export default calss Module {
     constructor (rawModule, runtime) {
@@ -378,7 +380,248 @@ resetStoreVM(this, state)
 // apply plugins// 安装插件
 plugins.forEach(plugin => plugin(this))
 ```
-在我们处理完模板关系后，接下来就是处理模板中 state、commit、actions、getters，在上述代码中，我们首先
+在我们处理完模板关系后，接下来就是处理模板中 state、commit、actions、getters，在上述代码中，我们首先将在当前实例对象上添加strict属性，表示当前
+Store是否严格模式，然后从this._modules.root.state上获取根模板的state既rootState,然后就是处理模板中 state、commit、actions、getters。
+
+注册处理 state、commit、 actions、 getter
+```
+class Store {
+    //code...
+    installModule(this, state, [], this._modules.root)
+    //code...
+}
+//installModule函数的具体代码
+/**
+*   接受参数如下
+*   store:当前Stroe的实例对象
+*   rootState:当前模板的根state
+*   path:当前模板路径，有key组成的数组
+*   module：当前模板
+*   hot:[Boolean]
+**/
+function installModule (store, rootState, path, module, hot) {
+    // 通过获取当前路径path，得知是否根模块
+    const isRoot = !path.length
+    // 获取当前模块的命名空间
+    const namespace = store._modules.getNamespace(path)
+    // register in namespace map
+    if (module.namespaced) {
+        if (store._modulesNamespaceMap[namespace] && __DEV__) {
+            console.error(`[vuex] duplicate namespace ${namespace} for the namespaced module ${path.join('/')}`)
+        }
+        // 存放当前命名空间模块 eg: {a:module,b:module,''a/c':module}
+        store._modulesNamespaceMap[namespace] = module
+    }
+    // 将所有字模板的state全部添加到rootState上
+    // set state
+    if (!isRoot && !hot) {
+        // 获取上一个模板的state，既当前模板的父级state
+        const parentState = getNestedState(rootState, path.slice(0, -1))
+        const moduleName = path[path.length - 1]
+        store._withCommit(() => {
+            if (__DEV__) {
+                if (moduleName in parentState) {
+                    console.warn(
+                        `[vuex] state field "${moduleName}" was overridden by a module with the same name at "${path.join('.')}"`
+                    )
+                }
+            }
+            Vue.set(parentState, moduleName, module.state)
+        })
+    }
+    // 根据namespace 对  dispatch commit  getter state处理函数进行包装
+    const local = module.context = makeLocalContext(store, namespace, path)
+
+    // module.forEachMutation:循环模板中的每个mutations,调用传入的函数
+    // 调用当前模块的原型方法  forEachMutation
+    // fn 回调函数 mutation：当前mutationd的具体某一项  key:当前mutation的名称
+    module.forEachMutation((mutation, key) => {
+        // 命名空间与具体mutations项的key联合一起
+        const namespacedType = namespace + key
+        // store实例   namespacedType：当前mutation对应的key（带命名空间） mutation：当前mutation的具体项  local
+        // registerMutation 注册mutations到store._mutations对象中{key:[mutation]}
+        registerMutation(store, namespacedType, mutation, local)
+    })
+    // 注册actions
+    module.forEachAction((action, key) => {
+        const type = action.root ? key : namespace + key
+        const handler = action.handler || action
+        registerAction(store, type, handler, local)
+    })
+    // 注册getter
+    module.forEachGetter((getter, key) => {
+        const namespacedType = namespace + key
+        registerGetter(store, namespacedType, getter, local)
+    })
+    
+    module.forEachChild((child, key) => {
+        installModule(store, rootState, path.concat(key), child, hot)
+    })
+}
+```
+如上所示，需要代码比较多，但是总体看起来并不复杂，我们来一起看看。
+
+##### installModule函数详情
+
+首先根据当前参数path来确定当前是否根模板，因为path是当前模块的路径，根模板的话这个path就是个空数组
+```
+const isRoot = !path.length
+```
+然后获取当前模板对应的命名空间key，通过store._modules获取当前ModuleCollection类的实例，然后调用其原型方法getNamespace。
+```
+const namespace = store._modules.getNamespace(path)
+
+class ModuleCollection{
+    //code...
+    getNamespace (path) {
+        let module = this.root
+        return path.reduce((namespace, key) => {
+            // 获取当前模块的子模板实例
+            module = module.getChild(key)
+            return namespace + (module.namespaced ? key + '/' : '')
+        }, '')
+    }
+    
+    //code...
+}
+```
+getNamespace函数作为ModuleCollection类的原型函数，接受一个参数path，Array类型，然后运用path.reduce，起始点位空字符串，每次获取
+key对应的module，然后根据module是否带有命名空间，来确定当前key是否连接起来，最后返回完整的命名空间key，多个key中间用"/"号连接，否则直接
+返回空字符串，表示当前模板不是命名空间模板。
+
+拿到模板名称后，接下来我们先处理命名模板，将带有命名空间的模板统一挂载到store._modulesNamespaceMap这个集合上，代码如下。
+```
+if (module.namespaced) {
+    if (store._modulesNamespaceMap[namespace] && __DEV__) {
+        console.error(`[vuex] duplicate namespace ${namespace} for the namespaced module ${path.join('/')}`)
+    }
+    // 存放当前命名空间模块 eg: {a:module,b:module,''a/c':module}
+    store._modulesNamespaceMap[namespace] = module
+}
+```
+接下来我们判断不是根节点，并且不是热替换时执行以下代码，将所有模板的state全部添加到rootState上
+```
+if (!isRoot && !hot) {
+    // 获取上一个模板的state，既当前模板的父级state
+    const parentState = getNestedState(rootState, path.slice(0, -1))
+    const moduleName = path[path.length - 1]
+    store._withCommit(() => {
+        if (__DEV__) {
+            if (moduleName in parentState) {
+                console.warn(
+                    `[vuex] state field "${moduleName}" was overridden by a module with the same name at "${path.join('.')}"`
+                )
+            }
+        }
+        Vue.set(parentState, moduleName, module.state)
+    })
+}
+```
+当不是根模板且不是热替换时，我们先获取当前模板的父state，在getNestedState函数中，我们获取的state的对象是rootState,然后通过path.reduce
+去循环递归访问，获取到当前模板父级state，
+```
+function getNestedState (state, path) {
+    return path.reduce((state, key) => state[key], state)
+}
+```
+接下来取path的最后一项值，既当前模板的名称，作为key，判断一下这个moduleName是否已经存在于父state，然后调用Vue.set，将当前模板的state添加到父级模板的state上，项目中具体如下
+```
+new Store({
+    state:{name:'hepeng'},
+    //其他项
+    modules:{
+        a:{state:{age:'22'}},
+        b:{
+            state:{job:'66666'},
+            //其他项
+            b1:{
+                state:{sex:'man'}
+            }
+        }
+    }
+})
+//在整理处理后得到
+
+rootState={
+    name:'hepeng',
+    a:{age:'22'},
+    b:{
+        job:'6666',
+        b1:{sex:'man'}
+    }
+}
+
+```
+接下来，对当前模板挂载content={dispatch,commit,getter,state}属性，根据当前模板是否带有命名空间，给content挂载不同的dispatch,commit,getter,state方法，之前
+已经对Store上的dispatch和commit进行包装过，这里怎么为什么又加上这样的操作，我们先保留这个疑问，之后介绍处理actions我们在作答。下面我们
+来看下这里具体是怎么处理的。
+```
+//Store构造函数中调用makeLocalContext函数，从变量名上了解是：设置本地上下文对象
+const local = module.context = makeLocalContext(store, namespace, path)
+
+// Store.js文件中定义makeLocalContext函数
+/**
+*   接受的参数列表
+*   store：当前store实例
+*   namespace: 当前命名空间的模板名称，假如该模板不是命名空间，则为空
+*   path：当前模板路径组成的数组
+*
+**/
+function makeLocalContext (store, namespace, path) {
+// 当前模块的名称
+const noNamespace = namespace === ''
+
+const local = {
+dispatch: noNamespace ? store.dispatch : (_type, _payload, _options) => {
+const args = unifyObjectStyle(_type, _payload, _options)
+const { payload, options } = args
+let { type } = args
+
+if (!options || !options.root) {
+type = namespace + type
+if (__DEV__ && !store._actions[type]) {
+console.error(`[vuex] unknown local action type: ${args.type}, global type: ${type}`)
+return
+}
+}
+
+return store.dispatch(type, payload)
+},
+
+commit: noNamespace ? store.commit : (_type, _payload, _options) => {
+const args = unifyObjectStyle(_type, _payload, _options)
+const { payload, options } = args
+let { type } = args
+
+if (!options || !options.root) {
+type = namespace + type
+if (__DEV__ && !store._mutations[type]) {
+console.error(`[vuex] unknown local mutation type: ${args.type}, global type: ${type}`)
+return
+}
+}
+
+store.commit(type, payload, options)
+}
+}
+
+// getters and state object must be gotten lazily
+// because they will be changed by vm update
+Object.defineProperties(local, {
+getters: {
+get: noNamespace
+? () => store.getters
+: () => makeLocalGetters(store, namespace)
+},
+state: {
+get: () => getNestedState(store.state, path)
+}
+})
+
+return local
+}
+```
+
 
 
 
