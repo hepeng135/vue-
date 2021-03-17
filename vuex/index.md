@@ -568,59 +568,97 @@ const local = module.context = makeLocalContext(store, namespace, path)
 *
 **/
 function makeLocalContext (store, namespace, path) {
-// 当前模块的名称
-const noNamespace = namespace === ''
+    // 根据namespace判断当前模板是否命名空间模块
+    const noNamespace = namespace === ''
 
-const local = {
-dispatch: noNamespace ? store.dispatch : (_type, _payload, _options) => {
-const args = unifyObjectStyle(_type, _payload, _options)
-const { payload, options } = args
-let { type } = args
+    const local = {
+        //如果不是命名空间模板，则取store.dispatch,如果是，则重新定义dispatch
+        dispatch: noNamespace ? store.dispatch : (_type, _payload, _options) => {
+            //判断参数类型，重新赋值，因为调用dispatch时有两种传参方式 
+            const args = unifyObjectStyle(_type, _payload, _options)
+            const { payload, options } = args
+            let { type } = args
+            //在命名空间模板中是否全局分发action，如果不是，在添加模板路径，表示分发当前模板的actions
+            if (!options || !options.root) {
+                type = namespace + type
+                if (__DEV__ && !store._actions[type]) {
+                    console.error(`[vuex] unknown local action type: ${args.type}, global type: ${type}`)
+                    return
+                }
+            }
+        
+            return store.dispatch(type, payload)
+        },
+        //提交载荷，判断类容上面的dispatch一样
+        commit: noNamespace ? store.commit : (_type, _payload, _options) => {
+            //提交载荷的方式也有两种，这里做这个处理
+            const args = unifyObjectStyle(_type, _payload, _options)
+            const { payload, options } = args
+            let { type } = args
+            //在非命名空间模板中，和处理action类似
+            if (!options || !options.root) {
+                type = namespace + type
+                if (__DEV__ && !store._mutations[type]) {
+                    console.error(`[vuex] unknown local mutation type: ${args.type}, global type: ${type}`)
+                    return
+                }
+            }
 
-if (!options || !options.root) {
-type = namespace + type
-if (__DEV__ && !store._actions[type]) {
-console.error(`[vuex] unknown local action type: ${args.type}, global type: ${type}`)
-return
-}
-}
+            store.commit(type, payload, options)
+        }
+    }
+    //定义getters和state属性，并且是只读的
+    Object.defineProperties(local, {
+        getters: {
+            get: noNamespace
+                ? () => store.getters
+                : () => makeLocalGetters(store, namespace)
+            },
+        state: {
+            get: () => getNestedState(store.state, path)
+        }
+    })
 
-return store.dispatch(type, payload)
-},
-
-commit: noNamespace ? store.commit : (_type, _payload, _options) => {
-const args = unifyObjectStyle(_type, _payload, _options)
-const { payload, options } = args
-let { type } = args
-
-if (!options || !options.root) {
-type = namespace + type
-if (__DEV__ && !store._mutations[type]) {
-console.error(`[vuex] unknown local mutation type: ${args.type}, global type: ${type}`)
-return
-}
-}
-
-store.commit(type, payload, options)
-}
-}
-
-// getters and state object must be gotten lazily
-// because they will be changed by vm update
-Object.defineProperties(local, {
-getters: {
-get: noNamespace
-? () => store.getters
-: () => makeLocalGetters(store, namespace)
-},
-state: {
-get: () => getNestedState(store.state, path)
-}
-})
-
-return local
+    return local
 }
 ```
+如上述代码所示，根据当前模板是否带有命名空间，对dispatch和commit进行包装，并且每个模板都带有自己的local对象，并且设置
+getter和state为只读属性。在后面我们介绍dispatch和commit时，将在重点介绍这里。
+
+回到installModule函数中，下面我们将看到对mutations、actions、getters的处理，通过三个循环分别将这三个对象添加到对应的Store的属性中，
+store._mutations、store._actions、store._wrappedGetters
+
+```
+//Store构造函数中的代码
+module.forEachMutation((mutation, key) => {
+    const namespacedType = namespace + key
+    registerMutation(store, namespacedType, mutation, local)
+})
+// 注册actions
+module.forEachAction((action, key) => {
+    const type = action.root ? key : namespace + key
+    const handler = action.handler || action
+    registerAction(store, type, handler, local)
+})
+// 注册getter
+module.forEachGetter((getter, key) => {
+    const namespacedType = namespace + key
+    registerGetter(store, namespacedType, getter, local)
+})
+```
+通过调用当前模板实例的forEachMutation，forEachAction，forEachGetter的实例方法，这三个方法比较类似，都是在里面调用forEachValue函数，
+既用Object.keys(module._rawModule.mutations/module._rawModule.actions/module._rawModule.getters)获取对应模板里的mutations、actions、
+getters的key集合，然后进行循环，在循环中调用传入的回调函数。
+
+
+接下来将介绍Store构造函数的state和getter的初始化。1：初始化Vuex的状态树，将state变成响应式数据，既与Vue的data遵循相同的规则。2：初始化getter，
+Vuex文档上介绍getter可以认定是Store的计算属性，且getter的返回值会根据它的依赖被缓存起来，且只有当他的依赖值发生了改变才会被重新计算，
+是不是和Vue中的计算属性的描述一模一样，下面我们看看Vuex中是怎么实现的。
+```
+//Store构造函数中的代码，
+ resetStoreVM(this, state)
+```
+
 
 
 
