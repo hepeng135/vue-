@@ -1,6 +1,6 @@
 Vue的核心插件Vuex，用来管理应用中的状态，下面我们将一起来看看Vuex的源码，并对一些常用的API进行讲解。
 
-## 目录接口
+## 目录
 Vuex的源码被托管在github上，我们首先通过git将代码clone下来，用心仪的IDE打开，文件目录如下。
 
 ![](./image/src.png)
@@ -46,7 +46,7 @@ export {
 如上述代码所示，我们一目了然的看到Vuex对外暴露的API，在入口我们先导入主要Store，install，然后就是一些辅助方法，然后在将其用两种方法导出。下面我们先主要
 分析一下Store和install
 
-#### 安装Store插件的Install方法
+#### 安装Vuex插件的Install方法
 在Vue安装插件需要调用Vue.use(plugin)来安装对应插件，在Vue中use的实现其实就是调用当前插件身上的install方法进行安装，
 但是在Store对象上并没有install方法，那是怎么实现的，在store.js文件中我们需要注意如下代码。
 ```
@@ -552,9 +552,8 @@ rootState={
 }
 
 ```
-接下来，对当前模板挂载content={dispatch,commit,getter,state}属性，根据当前模板是否带有命名空间，给content挂载不同的dispatch,commit,getter,state方法，之前
-已经对Store上的dispatch和commit进行包装过，这里怎么为什么又加上这样的操作，我们先保留这个疑问，之后介绍处理actions我们在作答。下面我们
-来看下这里具体是怎么处理的。
+接下来，对当前模板挂载content({dispatch,commit,getters,state})属性，根据当前模板是否带有命名空间，makeLocalContext函数会处理当前访问的应该是根模板数据还是当前模板数据，后续我们
+在调用getter，commit,dispatch回调函数的时候我们会提供参数既 当前模板的信息 （既模板上的local信息）或者根模板信息 store.state/getter/commit/dispatch。
 ```
 //Store构造函数中调用makeLocalContext函数，从变量名上了解是：设置本地上下文对象
 const local = module.context = makeLocalContext(store, namespace, path)
@@ -622,12 +621,8 @@ function makeLocalContext (store, namespace, path) {
     return local
 }
 ```
-如上述代码所示，根据当前模板是否带有命名空间，对dispatch和commit进行包装，并且每个模板都带有自己的local对象，并且设置
-getter和state为只读属性。在后面我们介绍dispatch和commit时，将在重点介绍这里。
-
 回到installModule函数中，下面我们将看到对mutations、actions、getters的处理，通过三个循环分别将这三个对象添加到对应的Store的属性中，
 store._mutations、store._actions、store._wrappedGetters
-
 ```
 //Store构造函数中的代码
 module.forEachMutation((mutation, key) => {
@@ -648,7 +643,82 @@ module.forEachGetter((getter, key) => {
 ```
 通过调用当前模板实例的forEachMutation，forEachAction，forEachGetter的实例方法，这三个方法比较类似，都是在里面调用forEachValue函数，
 既用Object.keys(module._rawModule.mutations/module._rawModule.actions/module._rawModule.getters)获取对应模板里的mutations、actions、
-getters的key集合，然后进行循环，在循环中调用传入的回调函数。
+getters的key集合，然后进行循环，在循环中调用传入的回调函数。在回调函数中我们做以下处理
+* Mutations
+```
+(mutation,key)=>{
+    const namespacedType = namespace + key
+    registerMutation(store, namespacedType, mutation, local)
+}
+function registerMutation (store, type, handler, local) {
+    const entry = store._mutations[type] || (store._mutations[type] = [])
+    entry.push(function wrappedMutationHandler (payload) {
+        handler.call(store, local.state, payload)
+    })
+}
+
+```
+在处理Mutations的回调函数中，先获取当前mutation的对应key和当前所在模板的路径，然后调用registerMutation函数，传入参数为store(当前store的实例对象)，
+namespacedType：当前路径+key的组合(当前mutation的完整路径，取决于当前是否作用域模板)，mutation:当前函数，local:根据namespace 对  dispatch commit  getter state处理函数进行包装
+后的对象。在registerMutation函数中，我们先获取store._mutations是否存在当前namespacedType，不存在则创建这个属性，并赋值空数组，然后push进一个函数，这个函数接受一个参数，既当前你通过
+commit调用mutation时提交的载荷，在这个函数中以当前store实例作为上下文对象调用这个mutations，既我们定义mutation回调，第一个参数为当前的state，第二个参数为载荷。
+
+* actions
+```
+(action, key) => {
+    const type = action.root ? key : namespace + key
+    const handler = action.handler || action
+    registerAction(store, type, handler, local)
+}
+function registerAction (store, type, handler, local) {
+    const entry = store._actions[type] || (store._actions[type] = [])
+    entry.push(function wrappedActionHandler (payload) {
+        let res = handler.call(store, {
+            dispatch: local.dispatch,
+            commit: local.commit,
+            getters: local.getters,
+            state: local.state,
+            rootGetters: store.getters,
+            rootState: store.state
+        }, payload)
+        if (!isPromise(res)) {
+            res = Promise.resolve(res)
+        }
+        if (store._devtoolHook) {
+            return res.catch(err => {
+                store._devtoolHook.emit('vuex:error', err)
+                throw err
+            })
+        } else {
+            return res
+        }
+    })
+}
+```
+在处理actions的回调函数中，大致处理和上面处理mutations的一样，有区别的是我们在命名空间模板中定义action时，可以设置他的root属性，既调用时
+不存在命名空间的限制，上面代码的判断就是做这些的，在最新Vuex API 上并没有这个描述，通过源码我们可以看出来，对于registerAction函数，先在store._actions上获取或者定义对于key的数组，然后在push一个函数，因为在定义actions
+的时候，第一个对象是一个参数，随意我们在调用action的时候需要解析local的 dispatch、commit、getters、state,然后解析store上的getters和state，由于我们调用action后返回的需要是个Promise对象，
+所有我们在这里判断，如果这个返回值不是Promise对象，则我们定义一个Promise。
+
+* getter
+```
+(getter, key) => {
+    const namespacedType = namespace + key
+    registerGetter(store, namespacedType, getter, local)
+}
+```
+在处理getter的回调函数中，和上面的mutations原理几乎一样，getter是返回一个值，且对应的key是唯一的，所以我们在registerGetter中需要检查是否重复，
+然后 store._wrappedGetters上定义这个属性，这个属性的值是一个函数，该函数在内部调用我们定义的getter，然后传入对应的参数。
+
+注意：为什么在处理actions和mutations定义都是数组呢，因为在不同的模板（不管是否拥有命名空间）我们可以定义相同的action和commit，我们在触发
+的时候，可以同时触发多个（这个有命名空间的区别）
+
+installModule函数中的最后一段代码，执行递归操作，对每个模板都需要执行该操作
+```
+module.forEachChild((child, key) => {
+    installModule(store, rootState, path.concat(key), child, hot)
+})
+```
 
 
 接下来将介绍Store构造函数的state和getter的初始化。1：初始化Vuex的状态树，将state变成响应式数据，既与Vue的data遵循相同的规则。2：初始化getter，
@@ -658,10 +728,63 @@ Vuex文档上介绍getter可以认定是Store的计算属性，且getter的返�
 //Store构造函数中的代码，
  resetStoreVM(this, state)
 ```
+该函数接受两个参数，this:当前store实例对象。state：当前所有模板的state对象，前面提到过，在installModule函数中，我们有将所有的state的引用根据模板之间
+的关系都整合到一个对象中。下面我们具体看看这个函数。
+```
+function resetStoreVM (store, state, hot) {
+  // 获取上一次的Vue实例
+  const oldVm = store._vm
 
+  store.getters = {}
 
+  store._makeLocalGettersCache = Object.create(null)
+  // 当前定义的getter
+  const wrappedGetters = store._wrappedGetters
+  const computed = {}
+  // fn：当前getter   key
+  forEachValue(wrappedGetters, (fn, key) => {
+    computed[key] = partial(fn, store)
+    Object.defineProperty(store.getters, key, {
+      get: () => store._vm[key],
+      enumerable: true // for local getters
+    })
+  })
 
+  const silent = Vue.config.silent
+  Vue.config.silent = true
+  store._vm = new Vue({
+    data: {
+      $$state: state
+    },
+    computed
+  })
+  Vue.config.silent = silent
 
+  if (store.strict) {
+    enableStrictMode(store)
+  }
+  if (oldVm) {
+    if (hot) {
+      store._withCommit(() => {
+        oldVm._data.$$state = null
+      })
+    }
+    Vue.nextTick(() => oldVm.$destroy())
+  }
+}
+```
+如上述代码所示，我们循环之前获取的的所有getter，通过partial函数包装一下，并添加到我们创建的computed的空对象中，并在store.getters对象上定义
+这个getter，定义为只读属性，只读属性指向store._vm.xxx，既我们就可以通过store.getters.xxx去读取getter。这样我们需要在store实例上定义_vm属性，
+在代码中使用建立Vue实例，将我们传入的data:state响应化，将之前我们定义的computed放在Vue的计算属性进行响应化，前面有提到getter与Vue中的computed，
+现在看到其实就是用的Vue中的computed进行绑定响应式，接下来当前store是严格模式的时候，只能通过mutation函数改变state，否则报错。
+
+Store类的构造函数的最后一段代码是处理Store插件的，既循环当前插件集合，然后调用每个插件，并传入当前store实例。后面我们介绍定义插件的时候在统一
+进行接受。
+```
+plugins.forEach(plugin => plugin(this))
+```
+
+到这里整体就已经很清楚呢，我就不再介绍那些辅助函数了，看了下挺简单，挺好理解的，上面的介绍可以更加断点重新跑几遍更有助于去理解。
 
 
 
