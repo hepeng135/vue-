@@ -16,4 +16,6 @@
 
 # vue3.x源码解析系列
 
-#### [createApp().mount('.app')经历的所有历程](./vue3/createApp().mount('.app').md);
+#### [Vue3源码之创建应用实例](./vue3/createApp.md)
+
+#### [Vue3源码之应用实例方法mount](./vue3/mount.md)
