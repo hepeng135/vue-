@@ -18,4 +18,7 @@
 
 #### [Vue3源码之创建应用实例](./vue3/createApp.md)
 
-#### [Vue3源码之应用实例方法mount](./vue3/mount.md)
+#### [Vue3源码之应用API mount](./vue3/mount.md)
+
+
+#### [Vue3源码之响应化API](./vue3/reactive.md)
